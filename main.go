@@ -15,10 +15,10 @@ const (
 )
 
 var (
-	modadvapi32 = syscall.NewLazyDLL("advapi32.dll")
-
+	modadvapi32         = syscall.NewLazyDLL("advapi32.dll")
 	procRegOpenKeyEx    = modadvapi32.NewProc("RegOpenKeyExW")
 	procRegQueryInfoKey = modadvapi32.NewProc("RegQueryInfoKeyW")
+	procRegQueryValueEx = modadvapi32.NewProc("RegQueryValueExW")
 )
 
 func RegOpenKeyEx(hKey syscall.Handle, subKey string, options, desiredAccess uint32) syscall.Handle {
@@ -29,30 +29,56 @@ func RegOpenKeyEx(hKey syscall.Handle, subKey string, options, desiredAccess uin
 		uintptr(unsafe.Pointer(subKeyPtr)),
 		uintptr(options),
 		uintptr(desiredAccess),
-		uintptr(unsafe.Pointer(&result)))
-
+		uintptr(unsafe.Pointer(&result)),
+	)
 	return result
 }
 
 func RegKeyHasContent(hKey syscall.Handle) bool {
 	var subKeys, values uint32
-	ret, _, _ := procRegQueryInfoKey.Call(
+	procRegQueryInfoKey.Call(
 		uintptr(hKey),
 		0, 0, 0,
 		uintptr(unsafe.Pointer(&subKeys)),
 		0, 0,
 		uintptr(unsafe.Pointer(&values)),
-		0, 0, 0, 0)
-	return ret == 0 && (subKeys > 0 || values > 0)
+		0, 0, 0, 0,
+	)
+	return subKeys > 0 || values > 0
+}
+
+func RegQueryValueEx(hKey syscall.Handle, valueName string) (string, error) {
+	valueNamePtr, _ := syscall.UTF16PtrFromString(valueName)
+	var buf [1024]uint16
+	var bufLen uint32 = 1024
+	var valueType uint32
+	ret, _, _ := procRegQueryValueEx.Call(
+		uintptr(hKey),
+		uintptr(unsafe.Pointer(valueNamePtr)),
+		0,
+		uintptr(unsafe.Pointer(&valueType)),
+		uintptr(unsafe.Pointer(&buf)),
+		uintptr(unsafe.Pointer(&bufLen)),
+	)
+	if ret != 0 {
+		return "", fmt.Errorf("error querying value: %d", ret)
+	}
+	value := syscall.UTF16ToString(buf[:bufLen/2])
+	return value, nil
 }
 
 func main() {
-	if len(os.Args) != 3 {
-		log.Fatalf("Usage: %s <hive> <registry_key>", os.Args[0])
+	if len(os.Args) < 3 {
+		log.Fatalf("Usage: %s <hive> <registry_key> [value_name]", os.Args[0])
 	}
 
 	hiveArg := os.Args[1]
 	subKey := os.Args[2]
+
+	var valueName string
+	if len(os.Args) == 4 {
+		valueName = os.Args[3]
+	}
 
 	var hive uintptr
 	switch hiveArg {
@@ -69,9 +95,18 @@ func main() {
 		hKey := RegOpenKeyEx(syscall.Handle(hive), subKey, 0, KEY_READ)
 		currentStatus := ""
 		if hKey == 0 || !RegKeyHasContent(hKey) {
-			currentStatus = "[*] No registry key found..."
+			currentStatus = "[ ] NO Registry Key Found"
 		} else {
-			currentStatus = "[*] Registry key found..."
+			if valueName != "" {
+				value, err := RegQueryValueEx(hKey, valueName)
+				if err != nil {
+					currentStatus = fmt.Sprintf("[*] Registry Key Found\n    \\ %s:%s : Error querying registry value: %s", hiveArg, subKey, err.Error())
+				} else {
+					currentStatus = fmt.Sprintf("[*] Registry Key Found\n    \\ %s:%s : %s", hiveArg, subKey, value)
+				}
+			} else {
+				currentStatus = fmt.Sprintf("[*] Registry Key Found\n    \\ %s:%s", hiveArg, subKey)
+			}
 			syscall.RegCloseKey(hKey) // Make sure to close the handle
 		}
 
@@ -80,6 +115,6 @@ func main() {
 			lastStatus = currentStatus
 		}
 
-		time.Sleep(5 * time.Second) // Wait for 5 seconds before checking again
+		time.Sleep(3 * time.Second)
 	}
 }
