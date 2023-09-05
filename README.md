@@ -12,6 +12,7 @@ The script takes two command-line arguments: the registry hive (HKLM or HKCU) an
 
 ```sh
 go run main.go <HIVE> "<Registry_Path>"
+```
 
 ## Examples
 
