@@ -1,84 +1,21 @@
 package main
 
 import (
+	"BlueEyE/registry"
 	"fmt"
 	"log"
 	"os"
 	"syscall"
 	"time"
-	"unsafe"
 )
-
-const (
-	KEY_QUERY_VALUE = 0x0001
-	KEY_READ        = 0x20019
-)
-
-var (
-	modadvapi32         = syscall.NewLazyDLL("advapi32.dll")
-	procRegOpenKeyEx    = modadvapi32.NewProc("RegOpenKeyExW")
-	procRegQueryInfoKey = modadvapi32.NewProc("RegQueryInfoKeyW")
-	procRegQueryValueEx = modadvapi32.NewProc("RegQueryValueExW")
-)
-
-func RegOpenKeyEx(hKey syscall.Handle, subKey string, options, desiredAccess uint32) syscall.Handle {
-	var result syscall.Handle
-	subKeyPtr, _ := syscall.UTF16PtrFromString(subKey)
-	procRegOpenKeyEx.Call(
-		uintptr(hKey),
-		uintptr(unsafe.Pointer(subKeyPtr)),
-		uintptr(options),
-		uintptr(desiredAccess),
-		uintptr(unsafe.Pointer(&result)),
-	)
-	return result
-}
-
-func RegKeyHasContent(hKey syscall.Handle) bool {
-	var subKeys, values uint32
-	procRegQueryInfoKey.Call(
-		uintptr(hKey),
-		0, 0, 0,
-		uintptr(unsafe.Pointer(&subKeys)),
-		0, 0,
-		uintptr(unsafe.Pointer(&values)),
-		0, 0, 0, 0,
-	)
-	return subKeys > 0 || values > 0
-}
-
-func RegQueryValueEx(hKey syscall.Handle, valueName string) (string, error) {
-	valueNamePtr, _ := syscall.UTF16PtrFromString(valueName)
-	var buf [1024]uint16
-	var bufLen uint32 = 1024
-	var valueType uint32
-	ret, _, _ := procRegQueryValueEx.Call(
-		uintptr(hKey),
-		uintptr(unsafe.Pointer(valueNamePtr)),
-		0,
-		uintptr(unsafe.Pointer(&valueType)),
-		uintptr(unsafe.Pointer(&buf)),
-		uintptr(unsafe.Pointer(&bufLen)),
-	)
-	if ret != 0 {
-		return "", fmt.Errorf("error querying value: %d", ret)
-	}
-	value := syscall.UTF16ToString(buf[:bufLen/2])
-	return value, nil
-}
 
 func main() {
 	if len(os.Args) < 3 {
-		log.Fatalf("Usage: %s <hive> <registry_key> [value_name]", os.Args[0])
+		log.Fatalf("Usage: %s <hive> <registry_key>", os.Args[0])
 	}
 
 	hiveArg := os.Args[1]
 	subKey := os.Args[2]
-
-	var valueName string
-	if len(os.Args) == 4 {
-		valueName = os.Args[3]
-	}
 
 	var hive uintptr
 	switch hiveArg {
@@ -91,28 +28,68 @@ func main() {
 	}
 
 	var lastStatus string
+	var lastValues map[string]string
+
 	for {
-		hKey := RegOpenKeyEx(syscall.Handle(hive), subKey, 0, KEY_READ)
-		currentStatus := ""
-		if hKey == 0 || !RegKeyHasContent(hKey) {
+		hKey, err := registry.RegOpenKeyEx(syscall.Handle(hive), subKey, 0, registry.KEY_READ)
+		var currentStatus string
+		var currentValues map[string]string = make(map[string]string)
+
+		if err != nil {
 			currentStatus = "[ ] NO Registry Key Found"
 		} else {
-			if valueName != "" {
-				value, err := RegQueryValueEx(hKey, valueName)
-				if err != nil {
-					currentStatus = fmt.Sprintf("[*] Registry Key Found\n    \\ %s:%s : Error querying registry value: %s", hiveArg, subKey, err.Error())
-				} else {
-					currentStatus = fmt.Sprintf("[*] Registry Key Found\n    \\ %s:%s : %s", hiveArg, subKey, value)
-				}
+			subKeys, values, err := registry.RegKeyHasContent(hKey)
+			if err != nil || (subKeys == 0 && values == 0) {
+				currentStatus = "[ ] NO Registry Key Found"
 			} else {
-				currentStatus = fmt.Sprintf("[*] Registry Key Found\n    \\ %s:%s", hiveArg, subKey)
+				currentStatus = fmt.Sprintf("[*] Registry Key Found\n \\ %s:%s", hiveArg, subKey)
+				if values > 0 {
+					// This is a registry key with values
+					for i := uint32(0); i < values; i++ {
+						valueName, valueData, err := registry.RegEnumValue(hKey, i)
+						if err != nil {
+							fmt.Printf("Error enumerating value: %s\n", err.Error())
+						} else {
+							currentValues[valueName] = valueData
+							currentStatus += fmt.Sprintf("\n   %s: %s", valueName, valueData)
+						}
+					}
+				} else {
+					// This is a folder, enumerate subkeys
+					for i := uint32(0); i < subKeys; i++ {
+						subKeyName, err := registry.RegEnumSubKey(hKey, i)
+						if err != nil {
+							fmt.Printf("Error enumerating subkey: %s\n", err.Error())
+						} else {
+							currentStatus += fmt.Sprintf("\n   \\ %s:%s\\%s", hiveArg, subKey, subKeyName)
+						}
+					}
+				}
 			}
 			syscall.RegCloseKey(hKey) // Make sure to close the handle
 		}
 
 		if currentStatus != lastStatus {
 			fmt.Println(currentStatus)
+			if lastValues != nil {
+				for key, value := range lastValues {
+					if currentValues[key] != value {
+						fmt.Printf("   - Modified: %s = %s (was %s)\n", key, currentValues[key], value)
+					}
+				}
+				for key := range currentValues {
+					if lastValues[key] == "" {
+						fmt.Printf("   - Added: %s = %s\n", key, currentValues[key])
+					}
+				}
+				for key := range lastValues {
+					if currentValues[key] == "" {
+						fmt.Printf("   - Removed: %s\n", key)
+					}
+				}
+			}
 			lastStatus = currentStatus
+			lastValues = currentValues
 		}
 
 		time.Sleep(3 * time.Second)
