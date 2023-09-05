@@ -1,3 +1,8 @@
+// Registry Key Monitor
+// Author: Parth Gol
+// School: Computer Science and Engineering
+// This script continuously monitors specified registry keys on a Windows system and reports any changes to those keys in real-time
+
 package registry
 
 import (
