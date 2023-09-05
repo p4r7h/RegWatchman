@@ -1,3 +1,8 @@
+// Registry Key Monitor
+// Author: Parth Gol
+// School: Computer Science and Engineering
+// This script continuously monitors specified registry keys on a Windows system and reports any changes to those keys in real-time
+
 package main
 
 import (
@@ -27,69 +32,66 @@ func main() {
 		log.Fatalf("Invalid hive specified: %s", hiveArg)
 	}
 
-	var lastStatus string
-	var lastValues map[string]string
+	knownKeys := make(map[string]struct{})
+	firstIteration := true
+	lastOutput := ""
 
 	for {
 		hKey, err := registry.RegOpenKeyEx(syscall.Handle(hive), subKey, 0, registry.KEY_READ)
-		var currentStatus string
-		var currentValues map[string]string = make(map[string]string)
-
+		currentOutput := ""
 		if err != nil {
-			currentStatus = "[ ] NO Registry Key Found"
+			currentOutput += fmt.Sprintf("[ ] No Registry Key Found\n  \\ %s\n", subKey)
 		} else {
-			subKeys, values, err := registry.RegKeyHasContent(hKey)
-			if err != nil || (subKeys == 0 && values == 0) {
-				currentStatus = "[ ] NO Registry Key Found"
-			} else {
-				currentStatus = fmt.Sprintf("[*] Registry Key Found\n \\ %s:%s", hiveArg, subKey)
-				if values > 0 {
-					// This is a registry key with values
-					for i := uint32(0); i < values; i++ {
-						valueName, valueData, err := registry.RegEnumValue(hKey, i)
-						if err != nil {
-							fmt.Printf("Error enumerating value: %s\n", err.Error())
-						} else {
-							currentValues[valueName] = valueData
-							currentStatus += fmt.Sprintf("\n   %s: %s", valueName, valueData)
-						}
-					}
+			subKeysCount, _, err := registry.RegKeyHasContent(hKey)
+			if err != nil {
+				log.Printf("Error querying registry key: %v", err)
+				time.Sleep(3 * time.Second)
+				continue
+			}
+
+			currentKeys := make(map[string]struct{})
+			for i := uint32(0); i < subKeysCount; i++ {
+				subKeyName, err := registry.RegEnumSubKey(hKey, i)
+				if err != nil {
+					log.Printf("Error enumerating subkeys: %v", err)
+					time.Sleep(3 * time.Second)
+					continue
+				}
+				currentKeys[subKeyName] = struct{}{}
+			}
+			syscall.RegCloseKey(hKey)
+
+			if firstIteration {
+				if subKeysCount > 0 {
+					currentOutput += fmt.Sprintf("[*] Registry Key is Found!\n  \\ %s\n", subKey)
 				} else {
-					// This is a folder, enumerate subkeys
-					for i := uint32(0); i < subKeys; i++ {
-						subKeyName, err := registry.RegEnumSubKey(hKey, i)
-						if err != nil {
-							fmt.Printf("Error enumerating subkey: %s\n", err.Error())
-						} else {
-							currentStatus += fmt.Sprintf("\n   \\ %s:%s\\%s", hiveArg, subKey, subKeyName)
-						}
+					currentOutput += fmt.Sprintf("[*] Registry Key is Found!\n  [-] %s\n", subKey)
+				}
+				for key := range currentKeys {
+					knownKeys[key] = struct{}{}
+					currentOutput += fmt.Sprintf("      [-] %s\\%s\n", subKey, key)
+				}
+				firstIteration = false
+			} else {
+				for key := range currentKeys {
+					if _, found := knownKeys[key]; !found {
+						currentOutput += fmt.Sprintf("[^] Registry Key Added\n  [+] %s\\%s\n", subKey, key)
+						knownKeys[key] = struct{}{}
+					}
+				}
+
+				for key := range knownKeys {
+					if _, found := currentKeys[key]; !found {
+						currentOutput += fmt.Sprintf("[^] Registry Key Deleted\n  [-] %s\\%s\n", subKey, key)
+						delete(knownKeys, key)
 					}
 				}
 			}
-			syscall.RegCloseKey(hKey) // Make sure to close the handle
 		}
 
-		if currentStatus != lastStatus {
-			fmt.Println(currentStatus)
-			if lastValues != nil {
-				for key, value := range lastValues {
-					if currentValues[key] != value {
-						fmt.Printf("   - Modified: %s = %s (was %s)\n", key, currentValues[key], value)
-					}
-				}
-				for key := range currentValues {
-					if lastValues[key] == "" {
-						fmt.Printf("   - Added: %s = %s\n", key, currentValues[key])
-					}
-				}
-				for key := range lastValues {
-					if currentValues[key] == "" {
-						fmt.Printf("   - Removed: %s\n", key)
-					}
-				}
-			}
-			lastStatus = currentStatus
-			lastValues = currentValues
+		if currentOutput != lastOutput {
+			fmt.Print(currentOutput)
+			lastOutput = currentOutput
 		}
 
 		time.Sleep(3 * time.Second)

@@ -1,9 +1,51 @@
-# BlueEyE
-Just a simple project for attack and defense solutions. You can monitor any given registry key value for changes, analyze them, and receive confirmation.
+# Registry Key Monitor
 
-- [x] Registery Monitor
+This Go script continuously monitors specified registry keys on a Windows system and reports any changes to those keys in real-time.
 
-Monitor the existence of a specific registry key and notify if there are any changes (creation or deletion)
+## Features
 
-`go run main.go <hive> <registry_key> [Value_name]
-`
+- Monitor specific registry keys or folders for changes.
+- Real-time update of the registry key status with detailed output.
+- Can detect registry key addition or deletion.
+
+The script takes two command-line arguments: the registry hive (HKLM or HKCU) and the registry key or folder path to monitor. 
+
+```sh
+go run main.go <HIVE> "<Registry_Path>"
+
+## Examples
+
+#### Monitoring a Registry Folder:
+```sh
+go run main.go HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths"
+```
+
+#### output
+```css
+[*] Registry Key is Found!
+  \ SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths
+      [-] SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\python3.11.exe
+      [-] SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\wt.exe
+      [-] SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\winget.exe
+```
+
+## Monitoring a Specific Registry Key:
+```go
+go run main.go HKCU "Software\Microsoft\Windows\CurrentVersion\App Paths\control.exe"
+```
+
+#### output
+```css
+[*] Registry Key is Found!
+  [-] SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths
+[ ] No Registry Key Found
+```
+
+#### Detecting Modifications:
+```css
+[^] Registry Key Deleted
+  [ ] SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\python3.11.exe
+
+[^] Registry Key Added
+  [+] SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\python3.11.exe
+```
